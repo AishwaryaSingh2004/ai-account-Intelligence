@@ -46,5 +46,26 @@ BATCH_DELAY_SECONDS = _int_setting("BATCH_DELAY_SECONDS", 3)
 MAX_OUTPUT_TOKENS = _int_setting("MAX_OUTPUT_TOKENS", 8192)
 
 
+# ---- Outside data sources (website, job boards, Wikidata, news, IP registry) ----
+# How this app identifies itself to the sites it reads. Set CONTACT_URL (e.g.
+# your repo or a contact page) to add it, as Wikimedia asks automated clients to.
+CONTACT_URL = str(_get_secret("CONTACT_URL", "") or "").strip()
+USER_AGENT = str(_get_secret("USER_AGENT", "") or "").strip() or (
+    "Mozilla/5.0 (compatible; AccountIntelBot/1.0; company research"
+    + (f"; +{CONTACT_URL}" if CONTACT_URL else "") + ")")
+HTTP_TIMEOUT_SECONDS = _int_setting("HTTP_TIMEOUT_SECONDS", 8, minimum=1)        # one request to a data source
+WEBSITE_TIME_BUDGET_SECONDS = _int_setting("WEBSITE_TIME_BUDGET_SECONDS", 12, minimum=2)  # homepage + About page
+IP_LOOKUP_TIMEOUT_SECONDS = _int_setting("IP_LOOKUP_TIMEOUT_SECONDS", 10, minimum=1)
+# How long optional lookups may run past the AI work they overlap with before
+# the report goes ahead without them.
+SIDE_LOOKUP_GRACE_SECONDS = _int_setting("SIDE_LOOKUP_GRACE_SECONDS", 12, minimum=0)
+NEWS_GRACE_SECONDS = _int_setting("NEWS_GRACE_SECONDS", 15, minimum=0)
+NEWS_MAX_ITEMS = _int_setting("NEWS_MAX_ITEMS", 5, minimum=1)
+BATCH_MAX_ROWS = _int_setting("BATCH_MAX_ROWS", 25, minimum=1)   # each row is a full multi-agent run
+# Who to contact when there is no visitor behavior to point to a team: the role
+# that usually buys what you sell. Change it to match your product.
+DEFAULT_CONTACT_ROLE = str(_get_secret("DEFAULT_CONTACT_ROLE", "Head of Sales") or "").strip() or "Head of Sales"
+
+
 def has_valid_key() -> bool:
     return bool(GEMINI_API_KEY)

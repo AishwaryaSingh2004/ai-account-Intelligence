@@ -279,6 +279,10 @@ CSS = """
 .fact:hover { border-color: rgba(139, 92, 246, .55); transform: translateY(-2px); }
 .fact small { display: block; font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
 .fact b { font-family: var(--display); font-weight: 600; font-size: 16px; color: var(--text); }
+.fact .via { display: block; margin-top: 6px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; color: var(--muted); }
+.fact .via.ok { color: #34d399; }
+.fact .via.est { color: #fbbf24; }
+.ai-tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px; font-family: var(--mono); font-size: 10px; letter-spacing: .06em; vertical-align: 1px; color: #fbbf24; border: 1px solid rgba(251, 191, 36, .4); background: rgba(251, 191, 36, .08); }
 
 .intent-wrap { display: flex; flex-direction: column; align-items: center; text-align: center; height: 100%; }
 .intent-head { width: 100%; display: flex; justify-content: space-between; align-items: center; }
@@ -321,6 +325,18 @@ CSS = """
 .tile b.unk { color: var(--muted); font-weight: 500; }
 
 .people { display: grid; gap: 10px; }
+.contacts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.contact { position: relative; padding: 16px; border-radius: 14px; background: rgba(5, 7, 15, .5); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.contact.first { border-color: rgba(34, 211, 238, .55); }
+.contact .rank { font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); }
+.contact b { font-family: var(--display); font-weight: 600; font-size: 16px; }
+.contact .title { font-size: 13px; color: var(--muted); }
+.contact p { margin: 0; font-size: 13px; line-height: 1.5; }
+.contact .meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: auto; flex-wrap: wrap; }
+.contact .via { font-family: var(--mono); font-size: 11px; }
+.contact .via.ok { color: #34d399; } .contact .via.find { color: #fbbf24; }
+.contact a { font-size: 13px; color: var(--cyan); text-decoration: none; }
+.contact a:hover { text-decoration: underline; }
 .person { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 14px; background: rgba(5, 7, 15, .5); border: 1px solid var(--line); transition: transform .25s, border-color .25s; }
 .person:hover { transform: translateX(4px); border-color: rgba(244, 114, 182, .5); }
 .avatar { flex: none; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; font-family: var(--display); font-weight: 700; font-size: 14px; color: #fff; background: linear-gradient(135deg, var(--violet), var(--pink)); box-shadow: 0 8px 20px -8px rgba(244, 114, 182, .7); }
@@ -404,8 +420,8 @@ def hero_html() -> str:
         f'<span class="blip" style="left:{x}%;top:{y}%;--d:{d};--c:{c}"></span>' for x, y, d, c in blips
     )
     tags = (
-        '<span class="radar-tag" style="left:34%;top:26%;--d:0s">intent 8.2</span>'
-        '<span class="radar-tag" style="left:52%;top:70%;--d:2.1s">decision maker</span>'
+        '<span class="radar-tag" style="left:34%;top:26%;--d:0s">buying intent</span>'
+        '<span class="radar-tag" style="left:52%;top:70%;--d:2.1s">who to contact</span>'
     )
     return f"""
 <section class="ai-hero">
@@ -435,7 +451,7 @@ def col_head_html(num: str, title: str, badge: str, text: str, alt: bool = False
 
 
 def go_hint_html() -> str:
-    return '<div class="go-hint"><i></i>5 AI agents run one after another</div>'
+    return '<div class="go-hint"><i></i>5 AI agents + live public data</div>'
 
 
 def tracker_html(active: str) -> str:
@@ -480,15 +496,29 @@ def company_and_intent_html(parsed, intent_help: str) -> str:
         f'<a class="domain-pill" href="{_e(url)}" target="_blank" rel="noopener noreferrer">&#8599; {_e(c.domain)}</a>'
         if url else ""
     )
+    sources = getattr(c, "fact_sources", None) or {}
+    estimate = lambda field: sources.get(field) == "AI estimate"
+    size = None
+    if c.employee_count:
+        size = f"{'~' if estimate('employee_count') else ''}{c.employee_count:,} employees"
     facts = [
-        ("Industry", c.industry),
-        ("Company size", f"{c.employee_count:,} employees" if c.employee_count else "Unknown"),
-        ("Headquarters", c.headquarters),
-        ("Founded", c.founded_year or "Unknown"),
+        ("Industry", c.industry, None),
+        ("Company size", size or "Unknown", "employee_count" if size else None),
+        ("Headquarters", c.headquarters, "headquarters"),
+        ("Founded", c.founded_year or "Unknown", "founded_year" if c.founded_year else None),
     ]
+
+    def via(field):
+        label = sources.get(field) if field else None
+        if not label:
+            return ""
+        if label == "AI estimate":
+            return '<span class="via est">AI estimate &middot; not verified</span>'
+        return f'<span class="via ok">&#10003; {_e(label)}</span>'
+
     fact_html = "".join(
-        f'<div class="fact rise" style="{_d(i, base=.35)}"><small>{k}</small><b>{_e(v)}</b></div>'
-        for i, (k, v) in enumerate(facts)
+        f'<div class="fact rise" style="{_d(i, base=.35)}"><small>{k}</small><b>{_e(v)}</b>{via(field)}</div>'
+        for i, (k, v, field) in enumerate(facts)
     )
 
     score = max(0.0, min(10.0, float(parsed.intent.score)))
@@ -557,9 +587,39 @@ def stack_and_people_html(parsed) -> str:
 </div>"""
 
 
+def contacts_html(parsed) -> str:
+    """Who to contact next: ranked people (verified names) or roles to find."""
+    items = getattr(parsed, "contacts", None) or []
+    if not items:
+        body = ('<p class="empty">No confirmed company yet, so there is no one to contact. '
+                'Confirm who the visitor is first (see the recommended action).</p>')
+    else:
+        ranks = ["Contact first", "Then", "Also loop in"]
+        cards = []
+        for i, c in enumerate(items):
+            url = _safe_url(c.linkedin)
+            link = (f'<a href="{_e(url)}" target="_blank" rel="noopener noreferrer">&#8599; '
+                    f'{"Find on LinkedIn" if c.name else "Search LinkedIn"}</a>') if url else ""
+            via = ('<span class="via ok">&#10003; verified name</span>' if c.name
+                   else '<span class="via find">role &middot; name not public</span>')
+            heading = f"<b>{_e(c.name)}</b><span class=\"title\">{_e(c.title)}</span>" if c.name else f"<b>{_e(c.title)}</b>"
+            cards.append(
+                f'<div class="contact rise{" first" if i == 0 else ""}" style="{_d(i, base=.2)}">'
+                f'<span class="rank">{ranks[min(i, 2)]}</span>{heading}<p>{_e(c.why)}</p>'
+                f'<div class="meta">{via}{link}</div></div>')
+        body = f'<div class="contacts">{"".join(cards)}</div>'
+    return f"""
+<div class="ai-grid"><div class="ai-card glow-border rise" style="--d:.18s">
+  <h3><span class="ic">&#9742;</span>Who to contact</h3>{body}
+</div></div>"""
+
+
 def signals_html(parsed, observed: list) -> str:
     if parsed.business_signals:
-        biz = '<ul class="list">' + "".join(f"<li>{_e(s)}</li>" for s in parsed.business_signals) + "</ul>"
+        verified = set(getattr(parsed, "verified_signals", None) or [])
+        tag = '<span class="ai-tag" title="Written by the AI model, not from a verified source">AI</span>'
+        biz = '<ul class="list">' + "".join(
+            f"<li>{_e(s)}{'' if s in verified else tag}</li>" for s in parsed.business_signals) + "</ul>"
     else:
         biz = '<p class="empty">No business signals identified.</p>'
 

@@ -52,8 +52,12 @@ def build_pdf(parsed) -> bytes:
     pdf.multi_cell(0, 10, _sanitize(c.name))
     pdf.ln(1)
     body(c.description)
-    body(f"Industry: {c.industry}   |   Employees: {c.employee_count or 'Unknown'}")
-    body(f"Headquarters: {c.headquarters}   |   Founded: {c.founded_year or 'Unknown'}   |   Domain: {c.domain or 'Unknown'}")
+    src = getattr(c, "fact_sources", None) or {}
+    tag = lambda field: f" ({src[field]})" if src.get(field) else ""
+    employees = f"{c.employee_count:,}{tag('employee_count')}" if c.employee_count else "Unknown"
+    body(f"Industry: {c.industry}   |   Employees: {employees}")
+    body(f"Headquarters: {c.headquarters}{tag('headquarters')}   |   Founded: "
+         f"{(str(c.founded_year) + tag('founded_year')) if c.founded_year else 'Unknown'}   |   Domain: {c.domain or 'Unknown'}")
 
     heading("Technology Stack")
     ts = parsed.tech_stack
@@ -68,10 +72,22 @@ def build_pdf(parsed) -> bytes:
         body("No leadership identified.")
     pdf.ln(2)
 
+    heading("Who to Contact")
+    contacts = getattr(parsed, "contacts", None) or []
+    if contacts:
+        for i, person in enumerate(contacts, 1):
+            who = f"{person.name} - {person.title}" if person.name else f"{person.title} (role; name not public)"
+            bullet(f"{i}. {who}: {person.why}")
+            body(f"   LinkedIn: {person.linkedin}")
+    else:
+        body("No confirmed company yet, so there is no one to contact.")
+    pdf.ln(2)
+
     heading("Business Signals")
     if parsed.business_signals:
+        verified = set(getattr(parsed, "verified_signals", None) or [])
         for signal in parsed.business_signals:
-            bullet(signal)
+            bullet(signal if signal in verified else f"{signal} (AI)")
     else:
         body("No business signals identified.")
     sources = getattr(parsed, "sources", [])

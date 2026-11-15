@@ -13,6 +13,13 @@ class Company(BaseModel):
     description: str
 
 
+class CompanyProfile(Company):
+    """The company as shown in the report: each fact's source ("Wikidata,
+    2024", "Company website" or "AI estimate"). Kept out of the Researcher's
+    response schema so the model can't label its own guesses as verified."""
+    fact_sources: dict[str, str] = {}
+
+
 class TechStack(BaseModel):
     crm: Optional[str] = None
     marketing_automation: Optional[str] = None
@@ -23,6 +30,14 @@ class TechStack(BaseModel):
 class Leader(BaseModel):
     name: str
     title: str
+
+
+class Contact(BaseModel):
+    name: Optional[str] = None   # None when only the role is known
+    title: str
+    why: str
+    source: str                  # "Verified leader" or "Role to find"
+    linkedin: str
 
 
 class Persona(BaseModel):
@@ -77,7 +92,7 @@ class Source(BaseModel):
 
 
 class AccountIntel(BaseModel):
-    company: Company
+    company: CompanyProfile
     tech_stack: TechStack
     business_signals: List[str]
     leadership: List[Leader]
@@ -90,6 +105,8 @@ class AccountIntel(BaseModel):
     sources: List[Source] = []
     confidence_notes: str
     news_unavailable: bool = False
+    verified_signals: List[str] = []  # business signals that come from real data, not the model
+    contacts: List[Contact] = []      # who to contact, best first
 
 
 # ---- Per-agent outputs: passed to Gemini as response schemas so every model,

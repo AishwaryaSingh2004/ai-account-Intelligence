@@ -1,23 +1,64 @@
+import ast
 import importlib
 import ipaddress
 import re
+import sys
 from pathlib import Path
 
 import streamlit as st
 
 import src
-from src import config, schema, validate, agents, report, ui
+
+
+def _src_modules_in_dependency_order():
+    """Every module in src/, ordered so each comes after the src modules it
+    imports. Found from the files themselves, so a newly added module can't
+    be left out (a forgotten one once crashed the app with "module
+    'src.provenance' has no attribute ...")."""
+    folder = Path(src.__file__).parent
+    names = sorted(f.stem for f in folder.glob("*.py") if f.stem != "__init__")
+    deps = {}
+    for name in names:
+        tree = ast.parse((folder / f"{name}.py").read_text(encoding="utf-8"))
+        found = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "src":
+                found |= {a.name for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("src."):
+                found.add(node.module.split(".")[1])
+            elif isinstance(node, ast.Import):
+                found |= {a.name.split(".")[1] for a in node.names if a.name.startswith("src.")}
+        deps[name] = found & set(names) - {name}
+    ordered, seen = [], set()
+
+    def visit(name, path=()):
+        if name in seen or name in path:  # done, or an import cycle: don't loop
+            return
+        for dep in sorted(deps[name]):
+            visit(dep, path + (name,))
+        seen.add(name)
+        ordered.append(name)
+
+    for name in names:
+        visit(name)
+    return ordered
+
 
 # Streamlit re-executes this script after a deploy but keeps already-imported
-# modules in memory, so a new app.py could call an old src/agents.py (this
-# caused "unexpected keyword argument 'on_step'" in production). Reload the
-# project's own modules whenever their files change. Order matters:
-# dependencies first.
+# modules in memory, so a new app.py could call old code (this caused
+# "unexpected keyword argument 'on_step'" in production). Whenever any file in
+# src/ changes, reload every project module, dependencies first, in place.
 _src_version = max(f.stat().st_mtime_ns for f in Path(src.__file__).parent.glob("*.py"))
 if getattr(src, "_loaded_version", None) != _src_version:
-    for _module in (config, schema, validate, agents, report, ui):
-        importlib.reload(_module)
+    for _name in _src_modules_in_dependency_order():
+        _full = f"src.{_name}"
+        if _full in sys.modules:
+            importlib.reload(sys.modules[_full])
+        else:
+            importlib.import_module(_full)
     src._loaded_version = _src_version
+
+from src import config, validate, agents, batch, report, ui  # noqa: E402  (after the reload above)
 
 run_full_pipeline, run_qna = agents.run_full_pipeline, agents.run_qna
 validate_intel = validate.validate_intel
@@ -69,6 +110,67 @@ with st.container(key="input_panel"):
 
 pages_visited = [p.strip() for p in pages_visited_raw.split("\n") if p.strip()] if pages_visited_raw else []
 
+def friendly_error(e: Exception) -> str:
+    """Plain-English message for the errors a user can actually hit."""
+    if agents.is_overloaded(e):
+        return "Gemini is overloaded right now (a temporary Google-side issue). Please try again in a minute."
+    if agents.is_rate_limited(e):
+        return "The Gemini rate limit was reached. Please wait 30 to 60 seconds and try again."
+    if "API key" in str(e) or "GEMINI_API_KEY" in str(e):
+        return f"Gemini API key problem: {e}"
+    return f"Something went wrong: {e}"
+
+
+# ---------- BATCH: a CSV of companies, ranked by intent score ----------
+with st.expander("**Batch: analyze a CSV of companies** :gray[(ranked by intent score)]", expanded=False):
+    st.markdown(
+        f"One row per company, up to {batch.MAX_ROWS}. Columns: `company_name` and/or `website` (or `ip_address`), "
+        "plus optional visitor behavior: `pages_visited` (separated by `;`), `time_on_site_seconds`, "
+        "`visits_this_week`, `referral_source`, `device`. "
+        "**Intent comes from visitor behavior**: rows without it score 0, so include it for a useful ranking. "
+        "Each company takes about 10 to 60 seconds; keep this tab open while it runs."
+    )
+    st.download_button("⬇  CSV template", data=batch.TEMPLATE.encode(), file_name="batch_template.csv",
+                       mime="text/csv", key="batch_template")
+    batch_file = st.file_uploader("Upload CSV", type=["csv"], key="batch_file")
+    batch_rows, batch_problems = batch.parse_csv(batch_file.getvalue()) if batch_file else ([], [])
+    for problem in batch_problems:
+        st.warning(problem)
+    if batch_rows:
+        st.caption(f"{len(batch_rows)} compan{'y' if len(batch_rows) == 1 else 'ies'} ready to analyze.")
+    batch_clicked = st.button("Analyze all  →", type="primary", key="batch_run", disabled=not batch_rows)
+
+    if not batch_file:
+        st.session_state.pop("batch_results", None)  # file removed: its results go too
+    if batch_clicked and batch_rows:
+        st.session_state.batch_results = []  # don't show the previous file's results while this runs
+        progress = st.progress(0.0, text="Starting…")
+
+        def _batch_progress(done, total, results):
+            # Saved after every company, so a page interruption keeps what's finished.
+            st.session_state.batch_results = results
+            progress.progress(done / total, text=f"Analyzed {done} of {total}")
+
+        batch.run_batch(batch_rows, run_full_pipeline, validate_intel, model=model_choice,
+                        on_progress=_batch_progress, delay_seconds=config.BATCH_DELAY_SECONDS,
+                        describe_error=friendly_error)
+        progress.empty()
+
+    if st.session_state.get("batch_results"):
+        ranked_rows = batch.ranked(st.session_state.batch_results)
+        failed = sum(1 for r in ranked_rows if r["Error"])
+        if failed:
+            st.warning(f"{failed} row(s) couldn't be analyzed; see the Error column (listed last).")
+        st.dataframe(
+            ranked_rows, hide_index=True, width="stretch",
+            column_config={
+                "Intent score": st.column_config.ProgressColumn("Intent score", min_value=0, max_value=10, format="%.1f"),
+                "CSV line": None,
+            },
+        )
+        st.download_button("⬇  Download ranked CSV", data=batch.to_csv(ranked_rows),
+                           file_name="ranked_accounts.csv", mime="text/csv", key="batch_download")
+
 
 def observed_signals(ip: str) -> list:
     """The visitor inputs as short chips, captured at analysis time so editing
@@ -113,17 +215,6 @@ def intent_explanation() -> str:
         "company profile alone. Add pages visited, visits this week, and time on site "
         "for a behavior-based score."
     )
-
-
-def friendly_error(e: Exception) -> str:
-    """Plain-English message for the errors a user can actually hit."""
-    if agents.is_overloaded(e):
-        return "Gemini is overloaded right now (a temporary Google-side issue). Please try again in a minute."
-    if agents.is_rate_limited(e):
-        return "The Gemini rate limit was reached. Please wait 30 to 60 seconds and try again."
-    if "API key" in str(e) or "GEMINI_API_KEY" in str(e):
-        return f"Gemini API key problem: {e}"
-    return f"Something went wrong: {e}"
 
 
 # ---------- RUN ----------
@@ -214,6 +305,7 @@ if "parsed" in st.session_state:
         )
 
     st.html(ui.company_and_intent_html(parsed, intent_help))
+    st.html(ui.contacts_html(parsed))
     st.html(ui.stack_and_people_html(parsed))
     st.html(ui.signals_html(parsed, observed))
     news = ui.news_html(parsed)
